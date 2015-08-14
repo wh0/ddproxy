@@ -4,11 +4,19 @@ import traceback
 
 import flask
 
-import requests
+import hammock
 
 domains = json.loads(os.environ['DOMAINS'])
-api_email = os.environ['CLOUDFLARE_EMAIL']
-api_key = os.environ['CLOUDFLARE_KEY']
+
+cloudflare = hammock.Hammock('https://api.cloudflare.com/client/v4', headers={
+	'X-Auth-Email': os.environ['CLOUDFLARE_EMAIL'],
+	'X-Auth-Key': os.environ['CLOUDFLARE_KEY'],
+})
+def cloudflare_result(response):
+	payload = response.json()
+	if not payload['success']:
+		raise Exception(payload)
+	return payload['result']
 
 app = flask.Flask(__name__)
 
@@ -16,42 +24,40 @@ app = flask.Flask(__name__)
 def update():
 	if flask.request.authorization is None:
 		return 'badauth', 401, {'Content-Type': 'text/plain', 'WWW-Authenticate': 'Basic realm="DynDNS API Access"'}
-	if 'hostname' not in flask.request.args:
+
+	if 'hostname' in flask.request.args:
+		hostname = flask.request.args['hostname']
+	else:
 		return 'notfqdn', 200, {'Content-Type': 'text/plain'}
-	hostname = flask.request.args['hostname']
-	if hostname not in domains:
+
+	if hostname in domains:
+		domain = domains[hostname]
+	else:
 		return 'nohost', 200, {'Content-Type': 'text/plain'}
-	domain = domains[hostname]
+
 	if flask.request.authorization.username != domain['username']:
 		return 'badauth', 200, {'Content-Type': 'text/plain'}
 	if flask.request.authorization.password != domain['password']:
 		return 'badauth', 200, {'Content-Type': 'text/plain'}
-	ip = flask.request.remote_addr
-	ip = flask.request.headers.get('X-Forwarded-For', ip)
-	ip = flask.request.args.get('myip', ip)
-	url = 'https://api.cloudflare.com/client/v4/zones/%s/dns_records/%s' % (
-		domain['zone_identifier'],
-		domain['identifier']
-	)
-	headers = {
-		'X-Auth-Email': api_email,
-		'X-Auth-Key': api_key
-	}
-	data = json.dumps({
-		'type': 'A',
-		'name': hostname,
-		'content': ip
-	})
+
+	if 'myip' in flask.request.args:
+		ip = flask.request.args['myip']
+	elif 'X-Forwarded-For' in flask.request.headers:
+		ip = flask.request.headers['X-Forwarded-For']
+	else:
+		ip = flask.request.remote_addr
+
 	try:
-		response = requests.put(url, headers=headers, data=data)
-		result = response.json()
-	except requests.exceptions.RequestException:
+		dns_records_update_result = cloudflare_result(cloudflare.zones(domain['zone_id']).dns_records(domain['dns_record_id']).PUT(data=json.dumps({
+			'type': 'A',
+			'name': hostname,
+			'content': ip,
+		})))
+	except:
 		traceback.print_exc()
 		return 'dnserr', 200, {'Content-Type': 'text/plain'}
-	if not result['success']:
-		print response.text
-		return 'dnserr', 200, {'Content-Type': 'text/plain'}
-	return 'good %s' % result['result']['content'], 200, {'Content-Type': 'text/plain'}
+
+	return 'good %s' % dns_records_update_result['content'], 200, {'Content-Type': 'text/plain'}
 
 port = int(os.environ.get('PORT', '5000'))
 app.run(host='0.0.0.0', port=port)
