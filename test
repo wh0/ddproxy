@@ -1,0 +1,6 @@
+#!/bin/sh
+
+DOMAINS=$(heroku config:get DOMAINS) \
+CLOUDFLARE_EMAIL=$(heroku config:get CLOUDFLARE_EMAIL) \
+CLOUDFLARE_KEY=$(heroku config:get CLOUDFLARE_KEY) \
+python app.py
